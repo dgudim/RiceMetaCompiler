@@ -6,6 +6,8 @@
 #include <sstream>
 #include <string>
 
+#define VERSION "Rice metacompiler v0.1.0"
+
 std::vector<std::string> split(const std::string &target, char c) {
     std::string temp;
     std::stringstream ss{target};
@@ -35,6 +37,18 @@ struct Struct {
     Location location;
     std::string name;
     std::vector<Field> fields;
+
+    std::string getLocation() {
+        if (location.empty()) {
+            return "";
+        }
+        std::string loc = location.at(0);
+        for (int i = 1; i < location.size(); i++) {
+            loc += "::" + location.at(i);
+        }
+        return loc;
+    }
+
     std::string getFullName() const {
         std::string full_name;
         for (auto loc : location) {
@@ -96,9 +110,8 @@ class Parser {
 
     // skip intil the chracter equals to ch
     void skipUntil(char ch) {
-        char curr_ch;
         while (ss.peek() != ch && ss.peek() != -1) {
-            curr_ch = ss.get();
+            ss.get();
         }
         ss.get();
     }
@@ -151,7 +164,6 @@ class Parser {
 
     // perse one line on AST
     void parseLine(bool &is_struct_definition, std::string &location) {
-        auto pos = ss.tellg();
         // statement always starts with -
         skipAllChars('-');
         // struct or class declaration
@@ -274,8 +286,10 @@ class Parser {
                 field_string += ", \n    {\"" + field.name + "\", &" + full_name + "::" + field.name + "}";
             }
             type_string += ">";
-            generated_code << "    " << type_string << " type() { \n    return " << type_string << "{Types::Struct"
-                           << field_string << "}; }\n};\n";
+            generated_code << "    " << type_string << " type() { \n    return " << type_string
+                           << "{Types::Struct,\n    "
+                           << "\"" << str.getLocation() << "\", "
+                           << "\"" << str.name << "\"" << field_string << "}; }\n};\n";
         }
         return generated_code.str();
     }
@@ -299,11 +313,6 @@ int main(int argc, char *argv[]) {
     using json = nlohmann::json;
     using namespace std;
 
-    if (system("clang++ -v") == -1) {
-        cout << "No clang++ found, exiting\n";
-        exit(1);
-    }
-
     string compileCommandsFile;
 
     string sourceFile;
@@ -315,9 +324,27 @@ int main(int argc, char *argv[]) {
     string curr_arg;
 
     bool print_to_console = false;
+    bool dump_ast = false;
+
     for (int i = 0; i < argc; i++) {
         curr_arg = std::string(argv[i]);
-        if (curr_arg.starts_with("header_file_path=")) {
+        if (curr_arg == "--version") {
+            cout << VERSION << endl;
+            exit(0);
+        } else if (curr_arg == "--help") {
+            cout << "OVERVIEW: " << VERSION << "\n\n";
+            cout << "USAGE: RiceMetaCompiler [options]\n\n";
+            cout << "OPTIONS: \n";
+            cout << "  --help                     Display this help page\n";
+            cout << "  --version                  Print version string\n";
+            cout << "  --print                    Print generated code to stdout\n";
+            cout << "  --dump                     Dump generated AST to a file\n";
+            cout << "  header_file_path =         Path to the header file to build the AST for\n";
+            cout << "  source_file_path =         Path to the source file, used with 'compile_commands_path' to search "
+                    "for additional includes and parameters\n";
+            cout << "  compile_commands_path =    Path to compile_commands.json\n";
+            exit(0);
+        } else if (curr_arg.starts_with("header_file_path=")) {
             headerFile = curr_arg.substr(17);
             filesystem::path headerFilePath = headerFile;
             headerFileName = headerFilePath.stem().string();
@@ -327,9 +354,16 @@ int main(int argc, char *argv[]) {
             sourceFileAbsPath = filesystem::absolute(sourceFilePath);
         } else if (curr_arg.starts_with("compile_commands_path=")) {
             compileCommandsFile = curr_arg.substr(22);
-        } else if (curr_arg == "-p") {
+        } else if (curr_arg == "--print") {
             print_to_console = true;
+        } else if (curr_arg == "--dump") {
+            dump_ast = true;
         }
+    }
+
+    if (system("clang++ -v") == -1) {
+        cout << "No clang++ found, exiting\n";
+        exit(1);
     }
 
     if (!headerFile.length()) {
@@ -377,9 +411,11 @@ int main(int argc, char *argv[]) {
                          "'"));
     auto end_clang = chrono::steady_clock::now();
 
-    ofstream ast_file(headerFileName + "_ast");
-    ast_file << ss.str();
-    ast_file.close();
+    if (dump_ast) {
+        ofstream ast_file(headerFileName + "_ast");
+        ast_file << ss.str();
+        ast_file.close();
+    }
 
     auto start_parse = chrono::steady_clock::now();
 
