@@ -56,8 +56,10 @@ template <typename T> class Member {
   private:
     std::string name;
     T member_pointer;
+    std::vector<std::string> attributes;
 
-    Member(std::string name, T pointer) : name(name), member_pointer(pointer) {}
+    Member(std::string name, T pointer, std::vector<std::string> attributes = {})
+        : name(name), member_pointer(pointer), attributes(attributes) {}
 
   public:
     std::string getName() const { return name; }
@@ -124,38 +126,4 @@ BUILTIN_GEN_TYPE(wchar_t);
 } // namespace Meta
 
 #define REFLECTABLE __attribute__((annotate("reflectable")))
-
-/*example
-
-struct Foo {
-  int i;
-  char ch;
-};
-
-struct Bar {
-  Foo foo;
-  double dbl;
-};
-
-template <> struct Meta::TypeOf<Foo> {
-  Type<Foo, int, char> type() {
-    return Type<Foo, int, char>{
-        Types::Struct, {"i", &Foo::i}, {"ch", &Foo::ch}};
-  }
-};
-
-template <> struct Meta::TypeOf<Bar> {
-  Type<Bar, Foo, double> type() {
-    return Type<Bar, Foo, double>{
-        Types::Struct, {"foo", &Bar::foo}, {"dbl", &Bar::dbl}};
-  }
-};
-
-int main() {
-  auto type = Meta::TypeOf<Foo>().type();
-  auto members = type.getMembers();
-  Meta::for_each(members, [](const auto &member) {
-    std::cout << member.getName() << "\n";
-  });
-  return 0;
-}*/
+#define NOT_REFLECTABLE __attribute__((annotate("not_reflectable")))
