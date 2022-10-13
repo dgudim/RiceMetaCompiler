@@ -1,3 +1,5 @@
+#pragma once
+
 #include <algorithm>
 #include <bits/utility.h>
 #include <cstddef>
@@ -10,8 +12,6 @@
 #include <tuple>
 #include <typeindex>
 #include <vector>
-
-#include "nameof/nameof.hpp"
 
 namespace Meta {
 
@@ -61,7 +61,7 @@ template <typename T> class Member {
 
   public:
     std::string getName() const { return name; }
-    constexpr T getMemberPointer() { return member_pointer; }
+    constexpr T getMemberPointer() const { return member_pointer; }
 };
 
 template <typename T, typename... MembersT> class Type {
@@ -69,15 +69,18 @@ template <typename T, typename... MembersT> class Type {
 
   private:
     Types type;
+    std::string namesp;
+    std::string name;
     typedef std::tuple<Member<MembersT T::*>...> tuple_t;
     tuple_t members;
     Type(Type &&) = default;
 
-    Type(Types type, Member<MembersT T::*>... members) : type(type), members(std::make_tuple(members...)) {}
+    Type(Types type, std::string namesp, std::string name, Member<MembersT T::*>... members)
+        : type(type), namesp(namesp), name(name), members(std::make_tuple(members...)) {}
 
   public:
-    constexpr char *getFullName() { return NAMEOF_TYPE(T); }
-    constexpr char *getShortName() { return NAMEOF_SHORT_TYPE(T); }
+    std::string getFullName() const { return namesp + "::" + name; }
+    const std::string &getShortName() const { return name; }
     tuple_t getMembers() { return members; }
     constexpr size_t getMembersCount() { return std::tuple_size_v<tuple_t>; }
     template <size_t i> constexpr decltype(auto) getMemberAt() { return std::get<i>(members); }
@@ -86,18 +89,20 @@ template <typename T, typename... MembersT> class Type {
 template <typename T> class Type<T> {
     template <typename R> friend struct TypeOf;
     Types type;
+    std::string namesp;
+    std::string name;
     Type() = default;
-    Type(Types type) : type(type) {}
+    Type(Types type, std::string namesp, std::string name) : type(type), namesp(namesp), name(name) {}
 
   public:
-    constexpr char *getFullName() { return NAMEOF_TYPE(T); }
-    constexpr char *getShortName() { return NAMEOF_SHORT_TYPE(T); }
+    std::string getFullName() { return namesp + "::" + name; }
+    const std::string &getShortName() { return name; }
     constexpr size_t getMembersCount() { return 0; }
 };
 
 #define BUILTIN_GEN_TYPE(b)                                                                                            \
     template <> struct TypeOf<b> {                                                                                     \
-        Type<b> type() { return Type<b>{Types::BuiltIn}; }                                                             \
+        Type<b> type() { return Type<b>{Types::BuiltIn, "", #b}; }                                                     \
     }
 
 BUILTIN_GEN_TYPE(bool);
@@ -120,31 +125,37 @@ BUILTIN_GEN_TYPE(wchar_t);
 
 #define REFLECTABLE __attribute__((annotate("reflectable")))
 
-/*example*/
+/*example
 
 struct Foo {
-    int i;
-    char ch;
+  int i;
+  char ch;
 };
 
 struct Bar {
-    Foo foo;
-    double dbl;
+  Foo foo;
+  double dbl;
 };
 
 template <> struct Meta::TypeOf<Foo> {
-    Type<Foo, int, char> type() { return Type<Foo, int, char>{Types::Struct, {"i", &Foo::i}, {"ch", &Foo::ch}}; }
+  Type<Foo, int, char> type() {
+    return Type<Foo, int, char>{
+        Types::Struct, {"i", &Foo::i}, {"ch", &Foo::ch}};
+  }
 };
 
 template <> struct Meta::TypeOf<Bar> {
-    Type<Bar, Foo, double> type() {
-        return Type<Bar, Foo, double>{Types::Struct, {"foo", &Bar::foo}, {"dbl", &Bar::dbl}};
-    }
+  Type<Bar, Foo, double> type() {
+    return Type<Bar, Foo, double>{
+        Types::Struct, {"foo", &Bar::foo}, {"dbl", &Bar::dbl}};
+  }
 };
 
 int main() {
-    auto type = Meta::TypeOf<Foo>().type();
-    auto members = type.getMembers();
-    Meta::for_each(members, [](const auto &member) { std::cout << member.getName() << "\n"; });
-    return 0;
-}
+  auto type = Meta::TypeOf<Foo>().type();
+  auto members = type.getMembers();
+  Meta::for_each(members, [](const auto &member) {
+    std::cout << member.getName() << "\n";
+  });
+  return 0;
+}*/
