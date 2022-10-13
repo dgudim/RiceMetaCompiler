@@ -26,6 +26,15 @@ using Location = std::vector<std::string>;
 struct Field {
     std::string name;
     std::string type;
+    std::vector<std::string> attributes;
+    bool not_reflectable;
+    std::string getAttributes() const {
+        std::string attributes_vector = "{";
+        for (auto &attribute : attributes) {
+            attributes_vector += attribute + ", ";
+        }
+        return attributes_vector + "}";
+    }
     friend std::ostream &operator<<(std::ostream &os, const Field &field);
 };
 
@@ -73,7 +82,7 @@ std::ostream &operator<<(std::ostream &os, const Struct &str) {
 
 class Parser {
     Location current_location;
-    std::vector<Struct> current_struct;
+    std::vector<Struct> current_struct_tree;
     std::vector<Struct> all_structs;
     std::stringstream &ss;
     int currentLevel = 0;
@@ -178,7 +187,7 @@ class Parser {
                     args.pop_back();
                     // type comes before 'definition' keyword
                     if (args.back() != "struct" && args.back() != "class") {
-                        current_struct.push_back({current_location, args.back()});
+                        current_struct_tree.push_back({current_location, args.back()});
                         location = args.back();
                         is_struct_definition = true;
                     }
@@ -188,7 +197,7 @@ class Parser {
         } else if (startsWith("FieldDecl")) {
             // extract args
             std::vector<std::string> args = extractArgs();
-            if (!current_struct.empty()) {
+            if (!current_struct_tree.empty()) {
                 std::string type = args.back();
                 type.pop_back();
                 size_t pos = type.find_last_of('\'');
@@ -196,13 +205,24 @@ class Parser {
                     type = type.substr(pos + 1);
                 }
                 // add to last struct
-                current_struct.back().fields.push_back({args.at(args.size() - 2), type});
+                current_struct_tree.back().fields.push_back({args.at(args.size() - 2), type});
             }
             // parse annotations
         } else if (startsWith("AnnotateAttr")) {
+
             if (tryFind("\"reflectable\"")) {
                 // we only need to parse structs with reflectable attribute
-                current_struct.back().is_reflectable = true;
+                current_struct_tree.back().is_reflectable = true;
+            } else {
+                if (!current_struct_tree.empty() && !current_struct_tree.back().fields.empty()) {
+                    auto &last_field = current_struct_tree.back().fields.back();
+                    if (tryFind("\"not_reflectable\"")) {
+                        // we don't need to parse not_reflectable fields
+                        current_struct_tree.back().fields.back().not_reflectable = true;
+                    } else {
+                        last_field.attributes.push_back(extractArgs().back());
+                    }
+                }
             }
             // parse namespaces
         } else if (startsWith("NamespaceDecl")) {
@@ -241,10 +261,10 @@ class Parser {
                 }
                 // we parsed a struct, add it to the list
                 if (is_struct_definition) {
-                    if (current_struct.back().is_reflectable) {
-                        all_structs.push_back(current_struct.back());
+                    if (current_struct_tree.back().is_reflectable) {
+                        all_structs.push_back(current_struct_tree.back());
                     }
-                    current_struct.pop_back();
+                    current_struct_tree.pop_back();
                 }
             } else {
                 // reset to line beginning before parse next or prev level
@@ -283,8 +303,12 @@ class Parser {
             generated_code << "> {\n";
             type_string = "Type<" + full_name;
             for (auto &field : str.fields) {
+                if (field.not_reflectable) {
+                    continue;
+                }
                 type_string += ", " + field.type;
-                field_string += ", \n    {\"" + field.name + "\", &" + full_name + "::" + field.name + "}";
+                field_string += ", \n    {\"" + field.name + "\", &" + full_name + "::" + field.name + ", " +
+                                field.getAttributes() + "}";
             }
             type_string += ">";
             generated_code << "    " << type_string << " type() { \n    return " << type_string
