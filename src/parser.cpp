@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #define VERSION "Rice metacompiler v0.1.0"
 
@@ -20,7 +21,7 @@ std::vector<std::string> split(const std::string &target, char c) {
     return result;
 }
 
-typedef std::vector<std::string> Location;
+using Location = std::vector<std::string>;
 
 struct Field {
     std::string name;
@@ -38,7 +39,7 @@ struct Struct {
     std::string name;
     std::vector<Field> fields;
 
-    std::string getLocation() {
+    std::string getLocation() const {
         if (location.empty()) {
             return "";
         }
@@ -78,13 +79,13 @@ class Parser {
     int currentLevel = 0;
 
   public:
-    Parser(std::stringstream &ss) : ss(ss) {}
+    explicit Parser(std::stringstream &ss) : ss(ss) { skipUntil('\n'); }
 
     // get line level in the AST
     int getLineLevel() {
         using namespace std;
         int lvl = 0;
-        char ch;
+        int ch;
         stringstream::pos_type pos;
         while (true) {
             pos = ss.tellg();
@@ -142,8 +143,8 @@ class Parser {
     }
 
     // try to find str in stream, stop at 'end'
-    bool tryFind(const std::string &str, char end = '\n') {
-        char ch;
+    bool tryFind(const std::string_view &str, char end = '\n') {
+        int ch;
         auto str_pos = str.begin();
         auto pos = ss.tellg();
         do {
@@ -190,7 +191,7 @@ class Parser {
             if (!current_struct.empty()) {
                 std::string type = args.back();
                 type.pop_back();
-                int pos = type.find_last_of('\'');
+                size_t pos = type.find_last_of('\'');
                 if (pos != std::string::npos) {
                     type = type.substr(pos + 1);
                 }
@@ -258,14 +259,14 @@ class Parser {
         } while (ss.peek() != -1);
     }
 
-    void dump() {
+    void dump() const {
         for (auto &s : all_structs) {
             std::cout << s << std::endl;
         }
     }
 
     // generate code for reflectionHelper from the parsed structs
-    std::string generateMetaCode(std::string header_file) {
+    std::string generateMetaCode(const std::string &header_file) const {
         std::stringstream generated_code;
         std::string type_string;
         std::string field_string;
@@ -295,8 +296,8 @@ class Parser {
     }
 };
 
-std::string exec(const std::string &cmd) {
-    std::shared_ptr<FILE> pipe(popen(cmd.c_str(), "r"), pclose);
+std::string exec(const std::string_view &cmd) {
+    std::shared_ptr<FILE> pipe(popen(cmd.data(), "r"), pclose);
     if (!pipe)
         return "ERROR";
     constexpr size_t buf_size = 0x100000; // 1MB buffer
@@ -386,19 +387,19 @@ int main(int argc, char *argv[]) {
 
         cout << "Including additonal params:";
 
-        for (const auto &[index, compile_command] : compileCommandsJson.items()) {
+        for (const auto &[command_index, compile_command] : compileCommandsJson.items()) {
             if (filesystem::absolute(compile_command["file"]) == sourceFileAbsPath) {
                 vector<string> params = split(compile_command["command"], ' ');
-                int index = 0;
+                int param_index = 0;
                 for (const auto &param : params) {
                     if (param == "-o") {
                         break;
                     }
-                    if (index >= 1) {
+                    if (param_index >= 1) {
                         additional_params += " " + param;
                         cout << param << "\n";
                     }
-                    index++;
+                    param_index++;
                 }
                 break;
             }
@@ -419,8 +420,6 @@ int main(int argc, char *argv[]) {
 
     auto start_parse = chrono::steady_clock::now();
 
-    while (ss.get() != '\n') {
-    };
     Parser parser(ss);
     parser.parseLevel();
 
