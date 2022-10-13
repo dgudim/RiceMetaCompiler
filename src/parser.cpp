@@ -335,14 +335,14 @@ int main(int argc, char *argv[]) {
             cout << "OVERVIEW: " << VERSION << "\n\n";
             cout << "USAGE: RiceMetaCompiler [options]\n\n";
             cout << "OPTIONS: \n";
-            cout << "  --help                     Display this help page\n";
-            cout << "  --version                  Print version string\n";
-            cout << "  --print                    Print generated code to stdout\n";
-            cout << "  --dump                     Dump generated AST to a file\n";
-            cout << "  header_file_path =         Path to the header file to build the AST for\n";
-            cout << "  source_file_path =         Path to the source file, used with 'compile_commands_path' to search "
-                    "for additional includes and parameters\n";
-            cout << "  compile_commands_path =    Path to compile_commands.json\n";
+            cout << "  --help                    Display this help page\n";
+            cout << "  --version                 Print version string\n";
+            cout << "  --print                   Print generated code to stdout\n";
+            cout << "  --dump                    Dump generated AST to a file\n";
+            cout << "  header_file_path=[path]   Path to the header file to build the AST for\n";
+            cout << "  source_file_path=[path]   Path to the source file, used with 'compile_commands_path' to "
+                    "search for additional includes and parameters\n";
+            cout << "  compile_commands_path=    Path to compile_commands.json\n";
             exit(0);
         } else if (curr_arg.starts_with("header_file_path=")) {
             headerFile = curr_arg.substr(17);
