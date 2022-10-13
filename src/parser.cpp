@@ -6,6 +6,8 @@
 #include <sstream>
 #include <string>
 
+#define VERSION "Rice metacompiler v0.1.0"
+
 std::vector<std::string> split(const std::string &target, char c) {
     std::string temp;
     std::stringstream ss{target};
@@ -311,11 +313,6 @@ int main(int argc, char *argv[]) {
     using json = nlohmann::json;
     using namespace std;
 
-    if (system("clang++ -v") == -1) {
-        cout << "No clang++ found, exiting\n";
-        exit(1);
-    }
-
     string compileCommandsFile;
 
     string sourceFile;
@@ -331,7 +328,23 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < argc; i++) {
         curr_arg = std::string(argv[i]);
-        if (curr_arg.starts_with("header_file_path=")) {
+        if (curr_arg == "--version") {
+            cout << VERSION << endl;
+            exit(0);
+        } else if (curr_arg == "--help") {
+            cout << "OVERVIEW: " << VERSION << "\n\n";
+            cout << "USAGE: RiceMetaCompiler [options]\n\n";
+            cout << "OPTIONS: \n";
+            cout << "  --help                     Display this help page\n";
+            cout << "  --version                  Print version string\n";
+            cout << "  --print                    Print generated code to stdout\n";
+            cout << "  --dump                     Dump generated AST to a file\n";
+            cout << "  header_file_path =         Path to the header file to build the AST for\n";
+            cout << "  source_file_path =         Path to the source file, used with 'compile_commands_path' to search "
+                    "for additional includes and parameters\n";
+            cout << "  compile_commands_path =    Path to compile_commands.json\n";
+            exit(0);
+        } else if (curr_arg.starts_with("header_file_path=")) {
             headerFile = curr_arg.substr(17);
             filesystem::path headerFilePath = headerFile;
             headerFileName = headerFilePath.stem().string();
@@ -346,6 +359,11 @@ int main(int argc, char *argv[]) {
         } else if (curr_arg == "--dump") {
             dump_ast = true;
         }
+    }
+
+    if (system("clang++ -v") == -1) {
+        cout << "No clang++ found, exiting\n";
+        exit(1);
     }
 
     if (!headerFile.length()) {
