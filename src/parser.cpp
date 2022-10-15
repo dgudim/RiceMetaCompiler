@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #define VERSION "Rice metacompiler v0.1.0"
 
@@ -20,11 +21,20 @@ std::vector<std::string> split(const std::string &target, char c) {
     return result;
 }
 
-typedef std::vector<std::string> Location;
+using Location = std::vector<std::string>;
 
 struct Field {
     std::string name;
     std::string type;
+    std::vector<std::string> attributes;
+    bool not_reflectable;
+    std::string getAttributes() const {
+        std::string attributes_vector = "{";
+        for (auto &attribute : attributes) {
+            attributes_vector += attribute + ", ";
+        }
+        return attributes_vector + "}";
+    }
     friend std::ostream &operator<<(std::ostream &os, const Field &field);
 };
 
@@ -38,7 +48,7 @@ struct Struct {
     std::string name;
     std::vector<Field> fields;
 
-    std::string getLocation() {
+    std::string getLocation() const {
         if (location.empty()) {
             return "";
         }
@@ -72,19 +82,19 @@ std::ostream &operator<<(std::ostream &os, const Struct &str) {
 
 class Parser {
     Location current_location;
-    std::vector<Struct> current_struct;
+    std::vector<Struct> current_struct_tree;
     std::vector<Struct> all_structs;
     std::stringstream &ss;
     int currentLevel = 0;
 
   public:
-    Parser(std::stringstream &ss) : ss(ss) {}
+    explicit Parser(std::stringstream &ss) : ss(ss) { skipUntil('\n'); }
 
     // get line level in the AST
     int getLineLevel() {
         using namespace std;
         int lvl = 0;
-        char ch;
+        int ch;
         stringstream::pos_type pos;
         while (true) {
             pos = ss.tellg();
@@ -142,8 +152,8 @@ class Parser {
     }
 
     // try to find str in stream, stop at 'end'
-    bool tryFind(const std::string &str, char end = '\n') {
-        char ch;
+    bool tryFind(const std::string_view &str, char end = '\n') {
+        int ch;
         auto str_pos = str.begin();
         auto pos = ss.tellg();
         do {
@@ -177,7 +187,7 @@ class Parser {
                     args.pop_back();
                     // type comes before 'definition' keyword
                     if (args.back() != "struct" && args.back() != "class") {
-                        current_struct.push_back({current_location, args.back()});
+                        current_struct_tree.push_back({current_location, args.back()});
                         location = args.back();
                         is_struct_definition = true;
                     }
@@ -187,21 +197,32 @@ class Parser {
         } else if (startsWith("FieldDecl")) {
             // extract args
             std::vector<std::string> args = extractArgs();
-            if (!current_struct.empty()) {
+            if (!current_struct_tree.empty()) {
                 std::string type = args.back();
                 type.pop_back();
-                int pos = type.find_last_of('\'');
+                size_t pos = type.find_last_of('\'');
                 if (pos != std::string::npos) {
                     type = type.substr(pos + 1);
                 }
                 // add to last struct
-                current_struct.back().fields.push_back({args.at(args.size() - 2), type});
+                current_struct_tree.back().fields.push_back({args.at(args.size() - 2), type});
             }
             // parse annotations
         } else if (startsWith("AnnotateAttr")) {
+
             if (tryFind("\"reflectable\"")) {
                 // we only need to parse structs with reflectable attribute
-                current_struct.back().is_reflectable = true;
+                current_struct_tree.back().is_reflectable = true;
+            } else {
+                if (!current_struct_tree.empty() && !current_struct_tree.back().fields.empty()) {
+                    auto &last_field = current_struct_tree.back().fields.back();
+                    if (tryFind("\"not_reflectable\"")) {
+                        // we don't need to parse not_reflectable fields
+                        current_struct_tree.back().fields.back().not_reflectable = true;
+                    } else {
+                        last_field.attributes.push_back(extractArgs().back());
+                    }
+                }
             }
             // parse namespaces
         } else if (startsWith("NamespaceDecl")) {
@@ -240,10 +261,10 @@ class Parser {
                 }
                 // we parsed a struct, add it to the list
                 if (is_struct_definition) {
-                    if (current_struct.back().is_reflectable) {
-                        all_structs.push_back(current_struct.back());
+                    if (current_struct_tree.back().is_reflectable) {
+                        all_structs.push_back(current_struct_tree.back());
                     }
-                    current_struct.pop_back();
+                    current_struct_tree.pop_back();
                 }
             } else {
                 // reset to line beginning before parse next or prev level
@@ -258,14 +279,14 @@ class Parser {
         } while (ss.peek() != -1);
     }
 
-    void dump() {
+    void dump() const {
         for (auto &s : all_structs) {
             std::cout << s << std::endl;
         }
     }
 
     // generate code for reflectionHelper from the parsed structs
-    std::string generateMetaCode(std::string header_file) {
+    std::string generateMetaCode(const std::string &header_file) const {
         std::stringstream generated_code;
         std::string type_string;
         std::string field_string;
@@ -282,8 +303,12 @@ class Parser {
             generated_code << "> {\n";
             type_string = "Type<" + full_name;
             for (auto &field : str.fields) {
+                if (field.not_reflectable) {
+                    continue;
+                }
                 type_string += ", " + field.type;
-                field_string += ", \n    {\"" + field.name + "\", &" + full_name + "::" + field.name + "}";
+                field_string += ", \n    {\"" + field.name + "\", &" + full_name + "::" + field.name + ", " +
+                                field.getAttributes() + "}";
             }
             type_string += ">";
             generated_code << "    " << type_string << " type() { \n    return " << type_string
@@ -295,8 +320,8 @@ class Parser {
     }
 };
 
-std::string exec(const std::string &cmd) {
-    std::shared_ptr<FILE> pipe(popen(cmd.c_str(), "r"), pclose);
+std::string exec(const std::string_view &cmd) {
+    std::shared_ptr<FILE> pipe(popen(cmd.data(), "r"), pclose);
     if (!pipe)
         return "ERROR";
     constexpr size_t buf_size = 0x100000; // 1MB buffer
@@ -335,14 +360,14 @@ int main(int argc, char *argv[]) {
             cout << "OVERVIEW: " << VERSION << "\n\n";
             cout << "USAGE: RiceMetaCompiler [options]\n\n";
             cout << "OPTIONS: \n";
-            cout << "  --help                     Display this help page\n";
-            cout << "  --version                  Print version string\n";
-            cout << "  --print                    Print generated code to stdout\n";
-            cout << "  --dump                     Dump generated AST to a file\n";
-            cout << "  header_file_path =         Path to the header file to build the AST for\n";
-            cout << "  source_file_path =         Path to the source file, used with 'compile_commands_path' to search "
-                    "for additional includes and parameters\n";
-            cout << "  compile_commands_path =    Path to compile_commands.json\n";
+            cout << "  --help                    Display this help page\n";
+            cout << "  --version                 Print version string\n";
+            cout << "  --print                   Print generated code to stdout\n";
+            cout << "  --dump                    Dump generated AST to a file\n";
+            cout << "  header_file_path=[path]   Path to the header file to build the AST for\n";
+            cout << "  source_file_path=[path]   Path to the source file, used with 'compile_commands_path' to "
+                    "search for additional includes and parameters\n";
+            cout << "  compile_commands_path=    Path to compile_commands.json\n";
             exit(0);
         } else if (curr_arg.starts_with("header_file_path=")) {
             headerFile = curr_arg.substr(17);
@@ -386,19 +411,19 @@ int main(int argc, char *argv[]) {
 
         cout << "Including additonal params:";
 
-        for (const auto &[index, compile_command] : compileCommandsJson.items()) {
+        for (const auto &[command_index, compile_command] : compileCommandsJson.items()) {
             if (filesystem::absolute(compile_command["file"]) == sourceFileAbsPath) {
                 vector<string> params = split(compile_command["command"], ' ');
-                int index = 0;
+                int param_index = 0;
                 for (const auto &param : params) {
                     if (param == "-o") {
                         break;
                     }
-                    if (index >= 1) {
+                    if (param_index >= 1) {
                         additional_params += " " + param;
                         cout << param << "\n";
                     }
-                    index++;
+                    param_index++;
                 }
                 break;
             }
@@ -419,8 +444,6 @@ int main(int argc, char *argv[]) {
 
     auto start_parse = chrono::steady_clock::now();
 
-    while (ss.get() != '\n') {
-    };
     Parser parser(ss);
     parser.parseLevel();
 
