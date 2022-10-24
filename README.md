@@ -1,5 +1,9 @@
-# RiceMetaCompiler
-Code generation from clang ast
+<h1 id="title">RiceMetaCompiler</h1>
+
+<img src="https://user-images.githubusercontent.com/34401005/196660579-1cd1553f-a77b-4e01-9374-976df2638b3b.png" height=0 id="old_icon"></img>
+<img src="https://user-images.githubusercontent.com/34401005/196664991-6832bfdd-6c2c-4279-9fab-c6665ccbc4bd.png" height=150 id="icon"></img>
+
+Reflection code generation from clang ast
 
 ## Installation (Compiling from source)
 ### Requirements
@@ -121,3 +125,5 @@ members:
 name: i
 value: 5
 ```
+
+<img src="https://user-images.githubusercontent.com/34401005/196667557-8fc7c13f-d37c-45ec-8033-ba5f90c061f2.png" height=0 id="thumb"></img>
