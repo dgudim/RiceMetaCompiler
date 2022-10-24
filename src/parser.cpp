@@ -1,13 +1,17 @@
-
+#include "parser.hpp"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
 
 #define VERSION "Rice metacompiler v0.1.0"
+
+template <typename T> using uptr = std::unique_ptr<T>;
 
 std::vector<std::string> split(const std::string &target, char c) {
     std::string temp;
@@ -21,69 +25,81 @@ std::vector<std::string> split(const std::string &target, char c) {
     return result;
 }
 
-using Location = std::vector<std::string>;
-
-struct Field {
-    std::string name;
-    std::string type;
-    std::vector<std::string> attributes;
-    bool not_reflectable;
-    std::string getAttributes() const {
-        std::string attributes_vector = "{";
-        for (auto &attribute : attributes) {
-            attributes_vector += attribute + ", ";
-        }
-        return attributes_vector + "}";
+int parsePositiveInt(const std::string &s) {
+    try {
+        std::size_t pos;
+        int result = std::stoi(s, &pos);
+        if (pos != s.size())
+            return -1;
+        return result;
+    } catch (const std::invalid_argument e) {
+        return -1;
     }
-    friend std::ostream &operator<<(std::ostream &os, const Field &field);
-};
-
-std::ostream &operator<<(std::ostream &os, const Field &field) {
-    os << field.type << " " << field.name << ";";
-    return os;
 }
 
-struct Struct {
-    Location location;
-    std::string name;
-    std::vector<Field> fields;
-
-    std::string getLocation() const {
-        if (location.empty()) {
-            return "";
-        }
-        std::string loc = location.at(0);
-        for (int i = 1; i < location.size(); i++) {
-            loc += "::" + location.at(i);
-        }
-        return loc;
+std::string Field::getAttributes() const {
+    std::string attributes_vector = "{";
+    for (auto &attribute : attributes) {
+        attributes_vector += attribute + ", ";
     }
+    return attributes_vector + "}";
+}
 
-    std::string getFullName() const {
-        std::string full_name;
-        for (auto loc : location) {
-            full_name += loc + "::";
+bool LocationNode::isTemplated() const {
+    return type == LocationNodeType::STRUCT && !associated_struct->template_params.empty();
+}
+
+using TemplateDeclarationHierarchy = std::vector<TemplateDeclaration>;
+
+std::string Struct::getTemplateHeading() const {
+    std::string templateStr;
+    if (!template_params.empty()) {
+        templateStr = "template <typename " + template_params.front().name;
+        for (int i = 1; i < template_params.size(); i++) {
+            templateStr += ", typename " + template_params.at(i).name;
         }
-        return full_name + name;
+        return templateStr + "> ";
     }
-    bool is_reflectable;
-    friend std::ostream &operator<<(std::ostream &os, const Struct &str);
-};
+    return templateStr;
+}
 
-std::ostream &operator<<(std::ostream &os, const Struct &str) {
-    os << str.getFullName();
-    os << " {";
-    for (const auto &field : str.fields) {
-        os << "\n    " << field;
+std::string Struct::getLocation(bool include_name) const {
+    using std::string;
+    if (location.empty()) {
+        return include_name ? getName() : "";
     }
-    os << "\n}";
-    return os;
+    string loc = (string)location.at(0);
+    for (int i = 1; i < location.size(); i++) {
+        loc += "::" + (string)location.at(i);
+    }
+    return loc + "::" + getName();
+}
+
+std::string Struct::getName() const {
+    std::string full_name = name;
+    if (!template_params.empty()) {
+        full_name += "<" + template_params.at(0).name;
+        for (int i = 1; i < template_params.size(); i++) {
+            full_name += ", " + template_params.at(i).name;
+        }
+    }
+    return full_name + ">";
+}
+
+bool Struct::isNestedInTemplates() const {
+    for (auto &location_node : location) {
+        if (location_node.isTemplated()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 class Parser {
     Location current_location;
-    std::vector<Struct> current_struct_tree;
-    std::vector<Struct> all_structs;
+    std::vector<std::unique_ptr<Struct>> current_struct_tree;
+    TemplateDeclarationHierarchy current_template_declaration_hierarchy;
+    std::vector<std::unique_ptr<Struct>> all_structs;
     std::stringstream &ss;
     int currentLevel = 0;
 
@@ -129,11 +145,34 @@ class Parser {
     // get args from the definition (name, line, etc.)
     std::vector<std::string> extractArgs() {
         std::vector<std::string> args;
+        std::string current_arg;
+        int current_char;
+
+        bool under_parenthesis = false;
+        bool under_triangle_parenthesis = false;
+
         std::string args_raw;
         while (ss.peek() != '\n') {
-            args_raw += ss.get();
+            current_char = ss.get();
+
+            if (current_char == '\'') {
+                under_parenthesis = !under_parenthesis;
+            } else if (current_char == '<') {
+                under_triangle_parenthesis = true;
+            } else if (current_char == '>') {
+                under_triangle_parenthesis = false;
+            }
+
+            if (current_char == ' ' && !under_parenthesis && !under_triangle_parenthesis) {
+                args.push_back(current_arg);
+                current_arg.clear();
+            } else {
+                current_arg += (char)current_char;
+            }
         }
-        args = split(args_raw, ' ');
+        if (!current_arg.empty()) {
+            args.push_back(current_arg);
+        }
         return args;
     }
 
@@ -173,13 +212,20 @@ class Parser {
     }
 
     // perse one line on AST
-    void parseLine(bool &is_struct_definition, std::string &location) {
+    void parseLine(bool &is_struct_definition, LocationNode &location, bool &is_template_declaration) {
         // statement always starts with -
         skipAllChars('-');
         // struct or class declaration
         if (startsWith("CXXRecordDecl")) {
+
             // declaration needs to be not implicit and we only need structs and classes
             if (!tryFind("implicit") && (tryFind("struct") || tryFind("class"))) {
+
+                TemplateDeclaration templateDeclaration;
+                if (!current_template_declaration_hierarchy.empty()) {
+                    templateDeclaration = current_template_declaration_hierarchy.back();
+                }
+
                 // get args
                 std::vector<std::string> args = extractArgs();
                 // we only need declarations with a definition
@@ -187,8 +233,11 @@ class Parser {
                     args.pop_back();
                     // type comes before 'definition' keyword
                     if (args.back() != "struct" && args.back() != "class") {
-                        current_struct_tree.push_back({current_location, args.back()});
-                        location = args.back();
+                        uptr<Struct> str;
+                        Struct *raw_struct = new Struct{current_location, args.back(), {}, templateDeclaration};
+                        str.reset(raw_struct);
+                        current_struct_tree.push_back(std::move(str));
+                        location = {args.back(), LocationNodeType::STRUCT, raw_struct};
                         is_struct_definition = true;
                     }
                 }
@@ -198,32 +247,36 @@ class Parser {
             // extract args
             std::vector<std::string> args = extractArgs();
             if (!current_struct_tree.empty()) {
+                if (args.back() == "mutable") {
+                    args.pop_back();
+                }
                 std::string type = args.back();
-                type.pop_back();
-                size_t pos = type.find_last_of('\'');
+                type.erase(0, 1);
+                size_t pos = type.find_first_of('\'');
                 if (pos != std::string::npos) {
-                    type = type.substr(pos + 1);
+                    type = type.substr(0, pos);
                 }
                 // add to last struct
-                current_struct_tree.back().fields.push_back({args.at(args.size() - 2), type});
+                current_struct_tree.back()->fields.push_back({args.at(args.size() - 2), type});
             }
             // parse annotations
         } else if (startsWith("AnnotateAttr")) {
 
-            if (tryFind("\"reflectable\"")) {
-                // we only need to parse structs with reflectable attribute
-                current_struct_tree.back().is_reflectable = true;
-            } else {
-                if (!current_struct_tree.empty() && !current_struct_tree.back().fields.empty()) {
-                    auto &last_field = current_struct_tree.back().fields.back();
+            if (!current_struct_tree.empty()) {
+                if (tryFind("\"reflectable\"")) {
+                    // we only need to parse structs with reflectable attribute
+                    current_struct_tree.back()->is_reflectable = true;
+                } else if (!current_struct_tree.back()->fields.empty()) {
+                    auto &last_field = current_struct_tree.back()->fields.back();
                     if (tryFind("\"not_reflectable\"")) {
                         // we don't need to parse not_reflectable fields
-                        current_struct_tree.back().fields.back().not_reflectable = true;
+                        current_struct_tree.back()->fields.back().not_reflectable = true;
                     } else {
                         last_field.attributes.push_back(extractArgs().back());
                     }
                 }
             }
+
             // parse namespaces
         } else if (startsWith("NamespaceDecl")) {
             std::vector<std::string> args = extractArgs();
@@ -232,8 +285,29 @@ class Parser {
                 args.pop_back();
             }
             // get namespace name
-            location = args.back();
+            location = {args.back(), LocationNodeType::NAMESPACE};
+        } else if (startsWith("ClassTemplateDecl")) {
+            // we found a template declaration, add an empty element to mark it
+            is_template_declaration = true;
+        } else if (startsWith("TemplateTypeParmDecl")) {
+
+            // the format is as follows:
+            // TemplateTypeParmDecl 0x7fffeb31bc28 <col:11, col:20> col:20 referenced typename depth 0 index 0 T
+
+            if (current_template_declaration_hierarchy.empty()) {
+                goto parseLine_finalize;
+            }
+
+            std::vector<std::string> args = extractArgs();
+
+            if (parsePositiveInt(args.back()) != -1) {
+                goto parseLine_finalize;
+            }
+
+            current_template_declaration_hierarchy.back().push_back(
+                {parsePositiveInt(args.at(args.size() - 2)), parsePositiveInt(args.at(args.size() - 4)), args.back()});
         }
+    parseLine_finalize:
         // skip until the end of the line
         skipUntil('\n');
     }
@@ -248,26 +322,38 @@ class Parser {
 
             // we are on our target level
             if (currentLevel == targetLevel) {
+
                 bool is_struct_definition = false;
-                std::string last_location;
+                LocationNode last_location_node;
+                bool is_template_declaration = false;
+
                 // parse each line
-                parseLine(is_struct_definition, last_location);
+                parseLine(is_struct_definition, last_location_node, is_template_declaration);
+
                 // we parsed a struct or a namespace, add to the current location
-                if (!last_location.empty()) {
-                    current_location.push_back(last_location);
+                if (!last_location_node.name.empty()) {
+                    current_location.push_back(last_location_node);
                     // parse next level
                     parseLevel(targetLevel + 1);
                     current_location.pop_back();
                 }
+
                 // we parsed a struct, add it to the list
                 if (is_struct_definition) {
-                    if (current_struct_tree.back().is_reflectable) {
-                        all_structs.push_back(current_struct_tree.back());
+                    if (current_struct_tree.back()->is_reflectable) {
+                        all_structs.push_back(std::move(current_struct_tree.back()));
                     }
                     current_struct_tree.pop_back();
+                } else if (is_template_declaration) {
+                    // we found a template, add to the current template tree
+                    current_template_declaration_hierarchy.push_back({});
+                    // parse next level
+                    parseLevel(targetLevel + 1);
+                    current_template_declaration_hierarchy.pop_back();
                 }
+
             } else {
-                // reset to line beginning before parse next or prev level
+                // reset to line beginning before parsing next or prev level
                 ss.seekg(line_begin);
                 if (currentLevel > targetLevel) {
                     parseLevel(targetLevel + 1);
@@ -281,7 +367,7 @@ class Parser {
 
     void dump() const {
         for (auto &s : all_structs) {
-            std::cout << s << std::endl;
+            std::cout << *s << "\n\n";
         }
     }
 
@@ -297,12 +383,18 @@ class Parser {
         generated_code << "#include <MetaCompiler/ReflectionHelper.hpp>\n\n";
 
         for (auto &str : all_structs) {
+
+            if (str->isNestedInTemplates()) {
+                std::cout << "WARNING: structs nested in templated structs are not supported(yet), affected struct: " +
+                                 str->getName() + "\n";
+            }
+
             field_string.clear();
-            full_name = str.getFullName();
-            generated_code << "template <> struct Meta::TypeOf<" + full_name;
+            full_name = str->getLocation(true);
+            generated_code << str->getTemplateHeading() << " struct Meta::TypeOf<" + full_name;
             generated_code << "> {\n";
             type_string = "Type<" + full_name;
-            for (auto &field : str.fields) {
+            for (auto &field : str->fields) {
                 if (field.not_reflectable) {
                     continue;
                 }
@@ -313,8 +405,8 @@ class Parser {
             type_string += ">";
             generated_code << "    " << type_string << " type() { \n    return " << type_string
                            << "{Types::Struct,\n    "
-                           << "\"" << str.getLocation() << "\", "
-                           << "\"" << str.name << "\"" << field_string << "}; }\n};\n";
+                           << "\"" << str->getLocation(false) << "\", "
+                           << "\"" << str->name << "\"" << field_string << "}; }\n};\n";
         }
         return generated_code.str();
     }
@@ -432,8 +524,8 @@ int main(int argc, char *argv[]) {
 
     auto start_clang = chrono::steady_clock::now();
     stringstream ss(exec("clang++" + additional_params +
-                         " -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -Wno-visibility '" + headerFile +
-                         "'"));
+                         " -Xclang -ast-dump -fsyntax-only -fno-color-diagnostics -Wno-visibility -std=c++17 '" +
+                         headerFile + "'"));
     auto end_clang = chrono::steady_clock::now();
 
     if (dump_ast) {
