@@ -45,48 +45,54 @@ std::string Field::getAttributes() const {
     return attributes_vector + "}";
 }
 
+bool LocationNode::isTemplated() const {
+    return type == LocationNodeType::STRUCT && !associated_struct->template_params.empty();
+}
+
 using TemplateDeclarationHierarchy = std::vector<TemplateDeclaration>;
 
-std::string Struct::getTemplate(bool include_typename) const {
+std::string Struct::getTemplateHeading() const {
     std::string templateStr;
-    TemplateDeclaration template_params_temp = template_params;
-    if (include_typename) {
-        // get all template parameters from all location nodes
-        for (auto &location_node : location) {
-            if (location_node.type == LocationNodeType::STURCT) {
-                for (auto &template_parameter : location_node.associated_struct->template_params) {
-                    template_params_temp.push_back(template_parameter);
-                }
-            }
-        }
-    }
     if (!template_params.empty()) {
-        templateStr = (include_typename ? "template <typename " : "<") + template_params.front().name;
+        templateStr = "template <typename " + template_params.front().name;
         for (int i = 1; i < template_params.size(); i++) {
-            templateStr += ", " + std::string(include_typename ? "typename " : "") + template_params.at(i).name;
+            templateStr += ", typename " + template_params.at(i).name;
         }
-        return templateStr + ">" + (include_typename ? " " : "");
+        return templateStr + "> ";
     }
     return templateStr;
 }
 
-std::string Struct::getLocation() const {
+std::string Struct::getLocation(bool include_name) const {
+    using std::string;
     if (location.empty()) {
-        return "";
+        return include_name ? getName() : "";
     }
-    std::string loc = location.at(0).name;
+    string loc = (string)location.at(0);
     for (int i = 1; i < location.size(); i++) {
-        loc += "::" + (std::string)location.at(i);
+        loc += "::" + (string)location.at(i);
     }
-    return loc;
+    return loc + "::" + getName();
 }
 
-std::string Struct::getFullName() const {
-    std::string full_name;
-    for (auto loc : location) {
-        full_name += (std::string)loc + "::";
+std::string Struct::getName() const {
+    std::string full_name = name;
+    if (!template_params.empty()) {
+        full_name += "<" + template_params.at(0).name;
+        for (int i = 1; i < template_params.size(); i++) {
+            full_name += ", " + template_params.at(i).name;
+        }
     }
-    return full_name + name + getTemplate();
+    return full_name + ">";
+}
+
+bool Struct::isNestedInTemplates() const {
+    for (auto &location_node : location) {
+        if (location_node.isTemplated()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 class Parser {
@@ -231,7 +237,7 @@ class Parser {
                         Struct *raw_struct = new Struct{current_location, args.back(), {}, templateDeclaration};
                         str.reset(raw_struct);
                         current_struct_tree.push_back(std::move(str));
-                        location = {args.back(), LocationNodeType::STURCT, raw_struct};
+                        location = {args.back(), LocationNodeType::STRUCT, raw_struct};
                         is_struct_definition = true;
                     }
                 }
@@ -377,9 +383,15 @@ class Parser {
         generated_code << "#include <MetaCompiler/ReflectionHelper.hpp>\n\n";
 
         for (auto &str : all_structs) {
+
+            if (str->isNestedInTemplates()) {
+                std::cout << "WARNING: structs nested in templated structs are not supported(yet), affected struct: " +
+                                 str->getName() + "\n";
+            }
+
             field_string.clear();
-            full_name = str->getFullName();
-            generated_code << str->getTemplate(true) << " struct Meta::TypeOf<" + full_name;
+            full_name = str->getLocation(true);
+            generated_code << str->getTemplateHeading() << " struct Meta::TypeOf<" + full_name;
             generated_code << "> {\n";
             type_string = "Type<" + full_name;
             for (auto &field : str->fields) {
@@ -393,7 +405,7 @@ class Parser {
             type_string += ">";
             generated_code << "    " << type_string << " type() { \n    return " << type_string
                            << "{Types::Struct,\n    "
-                           << "\"" << str->getLocation() << "\", "
+                           << "\"" << str->getLocation(false) << "\", "
                            << "\"" << str->name << "\"" << field_string << "}; }\n};\n";
         }
         return generated_code.str();

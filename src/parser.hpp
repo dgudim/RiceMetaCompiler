@@ -2,12 +2,15 @@
 
 struct Struct;
 
-enum class LocationNodeType { STURCT, NAMESPACE };
+enum class LocationNodeType { STRUCT, NAMESPACE };
 
 struct LocationNode {
     std::string name;
     LocationNodeType type;
     Struct *associated_struct = nullptr;
+
+    bool isTemplated() const;
+
     explicit operator std::string() const;
 };
 
@@ -44,19 +47,20 @@ struct Struct {
 
     bool is_reflectable = false;
 
-    std::string getTemplate(bool include_typename = false) const;
+    std::string getTemplateHeading() const;
 
-    std::string getLocation() const;
+    std::string getLocation(bool include_name) const;
+    std::string getName() const;
 
-    std::string getFullName() const;
+    bool isNestedInTemplates() const;
 
     friend std::ostream &operator<<(std::ostream &os, const Struct &str);
 };
 
 // Struct to stream output
 inline std::ostream &operator<<(std::ostream &os, const Struct &str) {
-    os << str.getTemplate(true);
-    os << str.getFullName();
+    os << str.getTemplateHeading();
+    os << str.getLocation(true);
     os << " {";
     for (const auto &field : str.fields) {
         os << "\n    " << field;
@@ -66,9 +70,9 @@ inline std::ostream &operator<<(std::ostream &os, const Struct &str) {
 }
 
 inline LocationNode::operator std::string() const {
-    std::string str = name;
-    if (type == LocationNodeType::STURCT) {
-        str += associated_struct->getTemplate();
+    if (type == LocationNodeType::STRUCT) {
+        return associated_struct->getName();
+    } else {
+        return name;
     }
-    return str;
 }
